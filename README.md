@@ -1,361 +1,314 @@
-# Домашнее задание к занятию 5 `«Тестирование roles»` - `Демин Герман`
+# Домашнее задание к занятию 6 `«Создание собственных модулей»` - `Демин Герман`
 
-### Molecule
+### Создание и запуск модуля
 
-```
-cd roles/clickhouse
+`cd lib/ansible/modules`
 
-molecule test -s ubuntu_xenial
-```
-
-Результат теста
-
-![clickhouse-test](/img/clickhouse-test.png)
-
-Тест не отработал, так как синтаксис molecule/ubuntu_xenial/molecule.yml устаревший и в текущих версиях является недействительным
+`nano my_own_module.py`
 
 ```
-cd ../vector-role
+#!/usr/bin/python
 
-molecule init scenario --driver-name docker
-```
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
 
-Команда не отработала, так как в новых версиях молекулы немного поменялся синтаксис команд
-
-Создаю сценарий командой
-
-`molecule init scenario docker`
-
-`nano molecule/docker/molecule.yml` 
-
-```
-driver:
-  name: docker
-
-
-ansible:
-  cfg:
-    defaults:
-      host_key_checking: false
-      verbosity: 1
-      allow_broken_conditionals: True
-    ssh_connection:
-      pipelining: true
-  env:
-    ANSIBLE_FORCE_COLOR: "1"
-    ANSIBLE_LOAD_CALLBACK_PLUGINS: "1"
-
-  executor:
-    backend: ansible-playbook
-    args:
-      ansible_playbook:
-        - --diff
-        - --force-handlers
-
-platforms:
-  - name: ubuntu
-    image: docker.io/library/ubuntu:22.04
-    privileged: true
-    pre_build_image: true
-    override_options:
-      container_options:
-        detach: true
-    ansible_connection: docker
-    ansible_user: root
-
-  - name: oraclelinux
-    image: docker.io/oraclelinux:9
-    privileged: true
-    pre_build_image: true
-    override_options:
-      container_options:
-        detach: true
-    ansible_connection: docker
-    ansible_user: root
-
-scenario:
-  test_sequence:
-    - dependency
-    - create
-    - converge
-    - idempotence
-    - verify
-    - cleanup
-    - destroy
-```
-
-`nano molecule/docker/converge.yml` 
-
-```
+DOCUMENTATION = r'''
 ---
-- name: Converge
-  hosts: all
-  become: true
-  gather_facts: true
+module: my_own_module
+short_description: Create text file with given content
+version_added: "1.0.0"
+description: This module creates a text file at the specified path with provided content.
+options:
+    path:
+        description: Path to the file that will be created.
+        required: true
+        type: str
+    content:
+        description: Content to write into the file.
+        required: true
+        type: str
+author:
+    - Your Name (@yourGitHubHandle)
+'''
 
-  roles:
-    - role: vector-role
+EXAMPLES = r'''
+- name: Create hello.txt with content
+  my_own_module:
+    path: /tmp/hello.txt
+    content: "Hello from custom module"
+'''
+
+RETURN = r'''
+changed:
+    description: Whether the file was created or modified.
+    type: bool
+    returned: always
+path:
+    description: Path of the file.
+    type: str
+    returned: always
+content:
+    description: Content written to the file.
+    type: str
+    returned: always
+'''
+
+from ansible.module_utils.basic import AnsibleModule
+import os
+
+
+def run_module():
+    module_args = dict(
+        path=dict(type='str', required=True),
+        content=dict(type='str', required=True),
+    )
+
+    result = dict(
+        changed=False,
+        path='',
+        content='',
+    )
+
+    module = AnsibleModule(
+        argument_spec=module_args,
+        supports_check_mode=True
+    )
+
+    path = module.params['path']
+    content = module.params['content']
+
+    result['path'] = path
+    result['content'] = content
+
+    if module.check_mode:
+        module.exit_json(**result)
+
+    # проверяем, есть ли файл и совпадает ли контент
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            existing_content = f.read()
+        if existing_content == content:
+            module.exit_json(**result)
+
+    # создаём/перезаписываем файл
+    try:
+        with open(path, 'w') as f:
+            f.write(content)
+        result['changed'] = True
+    except Exception as e:
+        module.fail_json(msg=str(e), **result)
+
+    module.exit_json(**result)
+
+
+def main():
+    run_module()
+
+
+if __name__ == '__main__':
+    main()
 ```
 
+`ansible localhost -m my_own_module -a "path=/tmp/test.txt content='Hello Ansible Module'" -c local`
 
 
-`molecule test --scenario-name docker`
+`ERROR: No module named 'jinja2'`
 
-После чего тест написал мне, что пакет vector отсутсвует в репозиториях
 
-Добавляю таски на установку напрямую с репо вектора и необходимых пакетов
+Устанавливаю модуль
 
-```
-- name: Install packages on ubuntu
-  apt:
-    name:
-      - python3
-      - sudo
-      - python3-apt
-      - software-properties-common
-      - curl
-    state: present
-  when: ansible_os_family == "Debian"
+`pip install jinja2`
 
-- name: Download Vector DEB package on Ubuntu
-  get_url:
-    url: "https://packages.timber.io/vector/latest/vector_latest-1_amd64.deb"
-    dest: "/tmp/vector.deb"
-  when: ansible_os_family == "Debian"
+Снова
 
-- name: Install Vector DEB package on Ubuntu
-  apt:
-    deb: "/tmp/vector.deb"
-  when: ansible_os_family == "Debian"
-
-- name: Install packages on oracle
-  dnf:
-    name:
-      - python3
-      - sudo
-      - python3-dnf
-      - curl
-    state: present
-  when: ansible_os_family == "RedHat"
-
-- name: Download Vector RPM package on OracleLinux
-  get_url:
-    url: "https://packages.timber.io/vector/latest/vector-latest-1.x86_64.rpm"
-    dest: "/tmp/vector.rpm"
-  when: ansible_os_family == "RedHat"
-
-- name: Install Vector RPM package on Oracle"
-  yum:
-    name: "/tmp/vector.rpm"
-    state: present
-    disable_gpg_check: yes
-  when: ansible_os_family == "RedHat"
-```
-
-Замечаю таск на проверку сервиса и комменчу, так как внутри докера нет systemd
+`ansible localhost -m my_own_module -a "path=/tmp/test.txt content='Hello Ansible Module'" -c local`
 
 ```
-#- name: Enable and start Vector service
-#  systemd:
-#    name: vector
-#    enabled: yes
-#    state: started
-#  tags:
-#    - "3.0"
-```
+ERROR: 'NoneType' object is not callable
 
-Также отключил по этой причине хендлер на рестарт сервиса и, узнав об этом из ошибки, убрал из tasks/main.yml
-
-`notify: restart vector`
-
-`molecule test --scenario-name docker`
-
-После всех махинаций тест наконец стал успешным
-
-![vector-test1](/img/vector-test1.png)
-
-Добавляю проверки
-
-`nano molecule/default/verify.yml`
-
-```
----
-- name: Verify
-  hosts: all
-  gather_facts: false
-  become: true
-
-  tasks:
-    - name: Проверка наличия конфигурационного файла vector-role
-      ansible.builtin.stat:
-        path: /etc/vector/vector.toml
-      register: vector_config
-
-    - name: Assert, что конфигурационный файл существует
-      ansible.builtin.assert:
-        that:
-          - vector_config.stat.exists
-        fail_msg: "Файл конфигурации vector не найден!"
-        success_msg: "Файл конфигурации vector найден."
-```
-
-Проверки на сервис я по вышеописанным причинам не добавлял
-
-`molecule test --scenario-name docker`
-
-Проверки также прошли успешно
-
-![vector-test2](/img/vector-test2.png)
-
-Делаю тег
-
-```
-git add .
-
-git commit -m "Fix Molecule scenario for Docker; Vector role working"
-
-git tag -a v1.0.1 -m "Working Molecule scenario for vector-role"
-
-git tag
-
-v1.0.1
-
-git push origin v1.0.1
-```
-
-
-
-### Tox
-
-
-Добавил файлы tox.ini и tox-requirements.txt в корень роли
-
-`docker run --privileged=True -v /home/drvidjet/Work/Demin/ansible/ansible-playbook-roles:/opt/vector-role -w /opt/vector-role -it aragast/netology:latest /bin/bash`
-
-`tox`
-
-Выполнилась установка модулей
-
-`mkdir molecule/lite`
-
-`dnf install nano`
-
-`nano molecule/lite/molecule.yml`
-
-
-```
----
-driver:
-  name: podman
-
-platforms:
-  - name: ubuntu
-    image: docker.io/library/ubuntu:22.04
-    ansible_connection: podman
-
-  - name: oraclelinux
-    image: docker.io/oraclelinux:9
-    ansible_connection: podman
-
-provisioner:
-  name: ansible
-  playbooks:
-    converge: ../../tasks/main.yml
-
-scenario:
-  test_sequence:
-    - create
-    - converge
-    - verify
-    - destroy
-```
-
-`molecule test --scenario-name lite`
-
-Сценарий не отработал, выдав ошибку модулей
-
-```
-[DEPRECATION WARNING]: Ansible will require Python 3.8 or newer on the 
-controller starting with Ansible 2.12. Current version: 3.6.8 (default, Jan 14 
-2022, 11:04:20) [GCC 8.5.0 20210514 (Red Hat 8.5.0-7)]. This feature will be 
-removed from ansible-core in version 2.12. Deprecation warnings can be disabled
- by setting deprecation_warnings=False in ansible.cfg.
-/usr/local/lib/python3.6/site-packages/ansible/parsing/vault/__init__.py:44: CryptographyDeprecationWarning: Python 3.6 is no longer supported by the Python core team. Therefore, support for it is deprecated in cryptography. The next release of cryptography will remove support for Python 3.6.
-  from cryptography.exceptions import InvalidSignature
 Traceback (most recent call last):
-  File "/usr/local/bin/molecule", line 5, in <module>
-    from molecule.__main__ import main
-  File "/usr/local/lib/python3.6/site-packages/molecule/__main__.py", line 24, in <module>
-    from molecule.shell import main
-  File "/usr/local/lib/python3.6/site-packages/molecule/shell.py", line 29, in <module>
-    from molecule import command, logger
-  File "/usr/local/lib/python3.6/site-packages/molecule/command/__init__.py", line 46, in <module>
-    from molecule.command.init import init  # noqa
-  File "/usr/local/lib/python3.6/site-packages/molecule/command/init/init.py", line 25, in <module>
-    from molecule.command.init import role, scenario
-  File "/usr/local/lib/python3.6/site-packages/molecule/command/init/role.py", line 30, in <module>
-    from molecule.command.init import base
-  File "/usr/local/lib/python3.6/site-packages/molecule/command/init/base.py", line 27, in <module>
-    import cookiecutter.main
-  File "/usr/local/lib/python3.6/site-packages/cookiecutter/main.py", line 19, in <module>
-    from cookiecutter.repository import determine_repo_dir
-  File "/usr/local/lib/python3.6/site-packages/cookiecutter/repository.py", line 11, in <module>
-    from cookiecutter.zipfile import unzip
-  File "/usr/local/lib/python3.6/site-packages/cookiecutter/zipfile.py", line 9, in <module>
-    import requests
-  File "/usr/local/lib/python3.6/site-packages/requests/__init__.py", line 43, in <module>
-    import urllib3
-  File "/usr/lib/python3.6/site-packages/urllib3/__init__.py", line 8, in <module>
-    from .connectionpool import (
-  File "/usr/lib/python3.6/site-packages/urllib3/connectionpool.py", line 11, in <module>
-    from .exceptions import (
-  File "/usr/lib/python3.6/site-packages/urllib3/exceptions.py", line 2, in <module>
-    from .packages.six.moves.http_client import (
-ModuleNotFoundError: No module named 'urllib3.packages.six'
+  File "/home/drvidjet/Work/Demin/ansible/ansible/lib/ansible/cli/__init__.py", line 93, in <module>
+    from ansible import constants as C
+  File "/home/drvidjet/Work/Demin/ansible/ansible/lib/ansible/constants.py", line 18, in <module>
+    config = ConfigManager()
+  File "/home/drvidjet/Work/Demin/ansible/ansible/lib/ansible/config/manager.py", line 343, in __init__
+    self._base_defs = self._read_config_yaml_file(defs_file or ('%s/base.yml' % os.path.dirname(__file__)))
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/drvidjet/Work/Demin/ansible/ansible/lib/ansible/config/manager.py", line 415, in _read_config_yaml_file
+    return yaml_load(config_def) or {}
+           ~~~~~~~~~^^^^^^^^^^^^
+TypeError: 'NoneType' object is not callable
 ```
 
-В tox.ini я изменил строчки
+Делаю вывод, что отсутсвует модуль для обработки yaml, либо установлена неподходящая под задачу версия
+
+`pip install pyYAML`
+
+Снова
+
+`ansible localhost -m my_own_module -a "path=/tmp/test.txt content='Hello Ansible Module'" -c local`
+
+
+На этот раз все прошло успешно
+
+![start-module1](/img/start-module1.png)
+
+Пробуем в плейбуке
+
+`nano playbook.yml`
 
 ```
-deps =
-    -r tox-requirements.txt
-    ansible210: ansible<3.0
-    ansible30: ansible<3.1
-commands =
-    {posargs:molecule test -s compatibility --destroy always}
+---
+- hosts: localhost
+  tasks:
+    - name: Create file with my own module
+      my_own_module:
+        path: /tmp/hello.txt
+        content: "Hello from custom module"
 ```
 
-На
+`ansible-playbook -c local playbook.yml`
+
+Все прошло успешно
+
+![start-module2](/img/start-module2.png)
+
+Запускаем второй раз
+
+![start-module3](/img/start-module3.png)
+
+Идемпотентность подтвердждена
+
+
+### Создание роли с модулем
+
+`deactivate`
+
+`ansible-galaxy collection init my_own_namespace.yandex_cloud_elk`
+
+`mkdir my_own_namespace/yandex_cloud_elk/plugins/modules`
+
+`cp lib/ansible/modules/my_own_module.py my_own_namespace/yandex_cloud_elk/plugins/modules/`
+
+`ansible-galaxy role init my_own_role --init-path my_own_namespace/yandex_cloud_elk/roles`
+
+`nano my_own_namespace/yandex_cloud_elk/roles/my_own_role/defaults/main.yml`
 
 ```
-deps =
-    -r tox-requirements.txt
-commands =
-    molecule test --scenario-name lite --destroy always
+---
+path: /tmp/default.txt
+content: "Hello from role default"
 ```
 
-Убрав конфликтующие версии, поправив синтаксис команды и подставив название своего сценария
-
-Снова пробую команду
-
-`tox`
-
-На этот раз она отработала корректно
-
-![vector-test3](/img/vector-test3.png)
-
-`exit`
-
-Делаю тег
+`nano my_own_namespace/yandex_cloud_elk/roles/my_own_role/tasks/main.yml`
 
 ```
+---
+- name: Create file using my own module
+  my_own_module:
+    path: "{{ path }}"
+    content: "{{ content }}"
+```
+
+`nano my_own_namespace/yandex_cloud_elk/role_playbook.yml`
+
+```
+---
+- hosts: localhost
+  roles:
+    - my_own_role
+```
+
+`nano my_own_namespace/yandex_cloud_elk/galaxy.yml`
+
+```
+namespace: my_own_namespace
+name: yandex_cloud_elk
+version: 1.0.0
+readme: README.md
+authors:
+  - "awakehns awake1394hns@gmail.com"
+description: "Collection that contains a custom module to create text files and a role to use it."
+license:
+  - GPL-3.0-or-later
+tags:
+  - files
+  - example
+  - custom-module
+```
+
+`nano my_own_namespace/yandex_cloud_elk/README.md`
+
+```
+# my_own_namespace.yandex_cloud_elk
+
+Collection: `my_own_namespace.yandex_cloud_elk`
+
+Короткое описание:
+This collection contains a custom module `my_own_module` that writes a text file at `path` with `content`, and a role `my_own_role` that wraps it.
+
+## Установка (локально)
+```bash
+ansible-galaxy collection install my_own_namespace-yandex_cloud_elk-1.0.0.tar.gz -p ./collections
+```
+
+Создаю тег
+
+```
+git remote set-url origin git@github.com:awakehns/my_own_collection.git
+
 git add .
 
-git tag -a v0.1.2 -m "Working lite scenario for molecule with podman driver"
+git commit -m "Add custom module and role"
 
-git push origin v0.1.2
+git tag 1.0.0
+
+git push origin main --tags
 ```
 
-Ссылка на репозиторий, в котором проводилась работа с molecule и tox
+Собираю архив
 
-https://github.com/awakehns/ansible-playbook-roles
+`ansible-galaxy collection build`
+
+Тест
+
+```
+mkdir test_collection && cd test_collection
+
+cp ../my_own_namespace-yandex_cloud_elk-1.0.0.tar.gz ./
+
+cp ../role_playbook.yml ./
+
+ansible-galaxy collection install my_own_namespace-yandex_cloud_elk-1.0.0.tar.gz
+```
+
+Установка прошла успешно
+
+![install](/img/install.png)
+
+Запуск финального playbook
+
+`cd ..`
+
+`ansible-playbook -c local role_playbook.yml`
+
+Все прошло успешно
+
+![playbook](/img/playbook.png)
+
+
+### Ссылка на репозиторий с коллекцией:
+
+#### https://github.com/awakehns/my_own_collection
+
+### Коллеция
+
+#### https://github.com/awakehns/my_own_collection/tree/main/my_own_namespace/yandex_cloud_elk
+
+### tar.gz внутри тега
+
+#### https://github.com/awakehns/my_own_collection/releases/tag/1.0.0
+
+### tar.gz в репо
+
+#### https://github.com/awakehns/my_own_collection/blob/main/my_own_namespace/yandex_cloud_elk/my_own_namespace-yandex_cloud_elk-1.0.0.tar.gz
